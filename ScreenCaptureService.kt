@@ -1,5 +1,6 @@
 package com.example.socketclient
 
+import android.app.Activity
 import android.app.Service
 import android.content.Intent
 import android.media.projection.MediaProjection
@@ -17,10 +18,12 @@ class ScreenCaptureService : Service() {
         if (intent != null && intent.hasExtra("mediaProjectionData")) {
             val resultData = intent.getParcelableExtra<Intent>("mediaProjectionData")
             val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = projectionManager.getMediaProjection(Activity.RESULT_OK, resultData!!)
-            
-            // TODO: Start virtual display capture here (surface/image reader)
-            Log.d("ScreenCaptureService", "MediaProjection initialized")
+            if (resultData != null) {
+                mediaProjection = projectionManager.getMediaProjection(Activity.RESULT_OK, resultData)
+                
+                // TODO: Start virtual display capture here (surface/image reader)
+                Log.d("ScreenCaptureService", "MediaProjection initialized")
+            }
         } else {
             Log.w("ScreenCaptureService", "No MediaProjection data received")
         }
@@ -34,4 +37,4 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
-}
+}}

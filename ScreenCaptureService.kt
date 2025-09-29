@@ -4,36 +4,144 @@ import android.app.Activity
 import android.app.Service
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
+import android.graphics.BitmapFactory
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
 import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
+import android.os.Bundle
 import android.os.IBinder
-import android.util.DisplayMetrics
+import android.os.Looper
 import android.util.Log
-import android.view.WindowManager
+import androidx.core.app.NotificationCompat
 import java.io.ByteArrayOutputStream
-import java.io.OutputStream
-import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.ByteBuffer
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.BlockingQueue
 
 class ScreenCaptureService : Service() {
 
-    private var mediaProjection: MediaProjection? = null
-    private var imageReader: ImageReader? = null
-    private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
+    companion object {
+        const val SERVER_IP = "192.168.43.27"
+        const val SERVER_PORT = 4444
+        const val NOTIFICATION_ID = 1
+        const val CHANNEL_ID = "screen_capture_channel"
+    }
 
-    // Handler thread for image processing (so UI thread is not used)
-    private var handlerThread: HandlerThread? = null
-    private var handler: Handler? = null
+    private lateinit var mediaProjection: MediaProjection
+    private lateinit var virtualDisplay: VirtualDisplay
+    private lateinit var imageReader: ImageReader
+    private lateinit var frameQueue: BlockingQueue<Bitmap>
+    private lateinit var senderThread: Thread
+    private var socket: Socket? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        frameQueue = ArrayBlockingQueue(10)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent == null) {
+            Log.e(TAG, "Intent is null, cannot start service")
+            return START_NOT_STICKY
+        }
+
+        val resultCode = intent.getIntExtra("resultCode", Activity.RESULT_CANCELED)
+        val data = intent.getParcelableExtra<Intent>("data")!!
+
+        val mediaProjectionManager =
+            getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
+
+        startForegroundService()
+
+        startScreenCapture()
+
+        return super.onStartCommand(intent, flags, startId)
+    }
+
+    private fun startForegroundService() {
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Screen Capture")
+            .setContentText("Capturing screen...")
+            .setSmallIcon(R.drawable.ic_notification)
+            .build()
+
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun startScreenCapture() {
+        imageReader = ImageReader.newInstance(1280, 720, PixelFormat.RGBA_8888, 2)
+        virtualDisplay = mediaProjection.createVirtualDisplay(
+            "ScreenCapture", 1280, 720,
+            resources.displayMetrics.densityDpi,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader.surface, null, null
+        )
+
+        imageReader.setOnImageAvailableListener({ reader ->
+            val image = reader.acquireNextImage()
+            image?.let {
+                processFrame(it)
+                it.close()
+            } ?: run {
+                Log.e(TAG, "Failed to acquire image")
+            }
+        }, Looper.myLooper())
+
+        startSenderThread()
+    }
+
+    private fun processFrame(image: Image) {
+        val bitmap = imageToBitmap(image)
+
+        try {
+            sendFrameToSocket(bitmap)
+        } finally {
+            if (!bitmap.isRecycled) {
+                bitmap.recycle() // Free up memory
+            }
+        }
+    }
+
+    private fun sendFrameToSocket(frame: Bitmap) {
+        val byteArray = compressFrame(frame)
+        socket?.getOutputStream()?.let { outputStream ->
+            outputStream.write(ByteBuffer.allocate(4).putInt(byteArray.size).array()) // Write frame size
+            outputStream.write(byteArray) // Write frame data
+        }
+    }
+
+    private fun compressFrame(frame: Bitmap): ByteArray {
+        val byteArrayOutputStream = ByteArrayOutputStream()
+        frame.compress(Bitmap.CompressFormat.JPEG, 85, byteArrayOutputStream)
+        return byteArrayOutputStream.toByteArray()
+    }
+
+    private fun imageToBitmap(image: Image): Bitmap {
+        val plane = image.planes[0]
+        val buffer = plane.buffer
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val rowPadding = rowStride - pixelStride * image.width
+        val bitmap = Bitmap.createBitmap(
+            image.width + rowPadding / pixelStride,
+            image.height,
+            Bitmap.Config.ARGB_8888
+        )
+        bitmap.copyPixelsFromBuffer(buffer)
+        return Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height)
+    }
+
+    private fun startSenderThread() {
+        senderThread = Thread {
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    socket = Socket(SERVER_IP, SERVER_PORT)
+                    val outputStream
     // Small queue to decouple image capture from network sending
     private val frameQueue = LinkedBlockingQueue<ByteArray>(8)
     private var senderThread: Thread? = null

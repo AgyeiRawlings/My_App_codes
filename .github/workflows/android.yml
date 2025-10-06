@@ -22,7 +22,6 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'gradle'
 
       - name: Install system dependencies
         run: |
@@ -31,16 +30,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-        with:
-          api-level: 33
-          build-tools: 33.0.2
-          components: |
-            platform-tools
-            platforms;android-33
-            build-tools;33.0.2
 
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses 2>/dev/null || true
+      - name: Install Android SDK components
+        run: |
+          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          yes | sdkmanager --licenses || true
 
       - name: Cache Gradle packages
         uses: actions/cache@v4
@@ -61,47 +55,74 @@ jobs:
           ls -la app 2>/dev/null || echo "No app directory found"
           echo ""
           echo "=== Gradle files ==="
-          find . -maxdepth 3 -name "*.gradle*" -o -name "gradlew*"
+          find . -maxdepth 3 \( -name "*.gradle*" -o -name "gradlew*" \) 2>/dev/null || true
 
-      - name: Validate Gradle wrapper
+      - name: Check for Gradle wrapper
+        id: check_gradlew
         run: |
-          if [ ! -f ./gradlew ]; then
-            echo "::error::Gradle wrapper not found. Please run 'gradle wrapper' and commit the files."
-            exit 1
+          if [ -f ./gradlew ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "Gradle wrapper found"
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "Gradle wrapper not found - will use fallback"
           fi
 
+      - name: Install Gradle (fallback)
+        if: steps.check_gradlew.outputs.found == 'false'
+        run: |
+          wget https://services.gradle.org/distributions/gradle-8.0-bin.zip
+          sudo unzip -d /opt/gradle gradle-8.0-bin.zip
+          sudo ln -s /opt/gradle/gradle-8.0/bin/gradle /usr/bin/gradle
+          gradle --version
+
       - name: Make Gradle wrapper executable
+        if: steps.check_gradlew.outputs.found == 'true'
         run: chmod +x ./gradlew
 
-      - name: Build Debug APK
-        run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
+      - name: Build Debug APK with Gradle Wrapper
+        if: steps.check_gradlew.outputs.found == 'true'
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
         timeout-minutes: 20
+
+      - name: Build Debug APK with Gradle
+        if: steps.check_gradlew.outputs.found == 'false'
+        run: gradle assembleDebug --no-daemon --stacktrace
+        timeout-minutes: 20
+
+      - name: Find and list APK files
+        if: always()
+        run: |
+          echo "=== Searching for APK files ==="
+          find . -name "*.apk" -type f 2>/dev/null || echo "No APK files found"
 
       - name: Show build logs on failure
         if: failure()
         run: |
           echo "=== Searching for build logs ==="
-          find . -type f -name "*.log" -path "*/build/*" -print -exec echo "File: {}" \; -exec tail -n 100 {} \; 2>/dev/null || true
+          find . -type f -name "*.log" -path "*/build/*" 2>/dev/null | while read log; do
+            echo "File: $log"
+            tail -n 100 "$log"
+          done || echo "No log files found"
 
       - name: Upload Debug APK
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk-${{ github.run_number }}
           path: |
-            app/build/outputs/apk/debug/*.apk
-            */build/outputs/apk/debug/*.apk
+            **/build/outputs/apk/debug/*.apk
+            **/build/outputs/apk/**/*debug*.apk
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Upload build reports
+      - name: Upload build reports on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: build-reports-${{ github.run_number }}
           path: |
-            app/build/reports/
-            */build/reports/
+            **/build/reports/
+            **/build/outputs/logs/
           if-no-files-found: ignore
           retention-days: 7

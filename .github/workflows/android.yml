@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       JAVA_TOOL_OPTIONS: "-Xmx3g"
+      GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx3g -Dorg.gradle.daemon=false"
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,17 +22,12 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'
 
-      - name: Install apt deps
+      - name: Install system dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y wget unzip zip lib32stdc++6 lib32z1
-
-      - name: Install Gradle (fallback if no gradlew)
-        run: |
-          if ! command -v gradle >/dev/null 2>&1; then
-            sudo apt-get install -y gradle
-          fi
+          sudo apt-get install -y wget unzip lib32stdc++6 lib32z1
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -39,45 +36,72 @@ jobs:
           build-tools: 33.0.2
           components: |
             platform-tools
-            platform-tools
             platforms;android-33
             build-tools;33.0.2
-            tools
 
       - name: Accept Android SDK licenses
-        run: |
-          yes | "$ANDROID_SDK_ROOT/tools/bin/sdkmanager" --licenses || true
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
-        env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+        run: yes | sdkmanager --licenses 2>/dev/null || true
 
-      - name: Print project tree (for debugging)
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Print project structure (debugging)
         run: |
-          echo "Repo root content:"
+          echo "=== Repository root ==="
           ls -la
-          echo "app folder content (if exists):"
-          ls -la app || true
+          echo ""
+          echo "=== App directory ==="
+          ls -la app 2>/dev/null || echo "No app directory found"
+          echo ""
+          echo "=== Gradle files ==="
+          find . -maxdepth 3 -name "*.gradle*" -o -name "gradlew*"
 
-      - name: Build (use gradlew if present, otherwise gradle)
+      - name: Validate Gradle wrapper
         run: |
-          set -e
-          if [ -f ./gradlew ]; then
-            chmod +x ./gradlew
-            ./gradlew assembleDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx3g" || (tail -n 200 ./app/build/outputs/**/*.log || true; exit 1)
-          else
-            gradle assembleDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx3g"
+          if [ ! -f ./gradlew ]; then
+            echo "::error::Gradle wrapper not found. Please run 'gradle wrapper' and commit the files."
+            exit 1
           fi
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace
         timeout-minutes: 20
 
-      - name: Show last lines of build outputs (if any)
-        if: always()
+      - name: Show build logs on failure
+        if: failure()
         run: |
-          echo "=== Last 200 lines of Gradle log files (if exist) ==="
-          find . -type f -name "*.log" -maxdepth 6 -print -exec tail -n 200 {} \; || true
+          echo "=== Searching for build logs ==="
+          find . -type f -name "*.log" -path "*/build/*" -print -exec echo "File: {}" \; -exec tail -n 100 {} \; 2>/dev/null || true
 
-      - name: Upload APK (if produced)
+      - name: Upload Debug APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug.apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: app-debug-apk-${{ github.run_number }}
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            */build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            */build/reports/
+          if-no-files-found: ignore
+          retention-days: 7

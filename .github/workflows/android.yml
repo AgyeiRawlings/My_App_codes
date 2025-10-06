@@ -3,8 +3,6 @@ name: Android APK Build
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   build:
@@ -23,12 +21,13 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build debug APK
+      - name: Build Debug APK
         run: |
-          gradle assembleDebug
+          cd My_App_codes-main
+          gradle :app:assembleDebug
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: My_App_codes-main/app/build/outputs/apk/debug/app-debug.apk

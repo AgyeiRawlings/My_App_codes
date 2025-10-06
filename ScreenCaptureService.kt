@@ -266,6 +266,238 @@ class ScreenCaptureService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+}        const val NOTIFICATION_ID = 1
+        const val CHANNEL_ID = "screen_capture_channel"
+        private const val TAG = "ScreenCaptureService"
+    }
+
+    private var mediaProjection: MediaProjection? = null
+    private var virtualDisplay: VirtualDisplay? = null
+    private var imageReader: ImageReader? = null
+    private var handlerThread: HandlerThread? = null
+    private var handler: Handler? = null
+
+    private val frameQueue = LinkedBlockingQueue<ByteArray>(8)
+    private var senderThread: Thread? = null
+
+    private val FRAME_INTERVAL_MS = 200L
+    private var lastFrameTime = 0L
+
+    override fun onCreate() {
+        super.onCreate()
+        createNotificationChannel()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.d(TAG, "Service started")
+
+        val resultData: Intent? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent?.getParcelableExtra("data", Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent?.getParcelableExtra("data")
+        }
+
+        if (resultData != null) {
+            val projectionManager =
+                getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+
+            mediaProjection = projectionManager.getMediaProjection(Activity.RESULT_OK, resultData)
+
+            if (mediaProjection != null) {
+                startForeground(NOTIFICATION_ID, createNotification())
+                startHandlerThread()
+                startSenderThread()
+                startScreenCapture()
+            } else {
+                Log.e(TAG, "Failed to get MediaProjection")
+                stopSelf()
+            }
+        } else {
+            Log.w(TAG, "Result data is null or missing")
+            stopSelf()
+        }
+
+        return START_STICKY
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Screen Capture Service",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+    }
+
+    private fun createNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("Screen Capture")
+        .setContentText("Capturing screen...")
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .build()
+
+    private fun startHandlerThread() {
+        handlerThread = HandlerThread("ImageListenerThread").apply { start() }
+        handler = Handler(handlerThread!!.looper)
+    }
+
+    private fun startSenderThread() {
+        senderThread = Thread {
+            var socket: Socket? = null
+            var out: OutputStream? = null
+
+            while (!Thread.currentThread().isInterrupted) {
+                try {
+                    if (socket == null || socket.isClosed || !socket.isConnected) {
+                        try {
+                            socket = Socket()
+                            socket.connect(InetSocketAddress(SERVER_IP, SERVER_PORT), 5000)
+                            out = socket.getOutputStream()
+                            Log.d(TAG, "Connected to server $SERVER_IP:$SERVER_PORT")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Connect failed: ${e.message}")
+                            socket?.close()
+                            socket = null
+                            out = null
+                            Thread.sleep(2000)
+                            continue
+                        }
+                    }
+
+                    val frame = frameQueue.poll(500, TimeUnit.MILLISECONDS) ?: continue
+
+                    try {
+                        val sizeBytes = frame.size.toString().toByteArray(Charsets.US_ASCII)
+                        out?.write(sizeBytes)
+                        out?.write('\n'.code)
+                        out?.write(frame)
+                        out?.flush()
+                        Log.d(TAG, "Frame sent: ${frame.size} bytes")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Send failed: ${e.message}")
+                        socket?.close()
+                        socket = null
+                        out = null
+                        frameQueue.offer(frame)
+                        Thread.sleep(1000)
+                    }
+                } catch (ie: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Sender thread error: ${e.message}")
+                }
+            }
+
+            try {
+                socket?.close()
+            } catch (_: Exception) {
+            }
+        }
+        senderThread!!.start()
+    }
+
+    private fun startScreenCapture() {
+        val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+
+        val width = metrics.widthPixels
+        val height = metrics.heightPixels
+        val screenDensity = metrics.densityDpi
+
+        Log.d(TAG, "Screen size: ${width}x$height, density: $screenDensity")
+
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+
+        virtualDisplay = mediaProjection?.createVirtualDisplay(
+            "ScreenCapture",
+            width,
+            height,
+            screenDensity,
+            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+            imageReader?.surface,
+            null,
+            null
+        )
+
+        imageReader?.setOnImageAvailableListener({ reader ->
+            val now = System.currentTimeMillis()
+            if (now - lastFrameTime < FRAME_INTERVAL_MS) {
+                val imgToDrop = reader.acquireLatestImage()
+                imgToDrop?.close()
+                return@setOnImageAvailableListener
+            }
+            lastFrameTime = now
+
+            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+
+            try {
+                val plane = image.planes[0]
+                val buffer: ByteBuffer = plane.buffer
+                val pixelStride = plane.pixelStride
+                val rowStride = plane.rowStride
+                val rowPadding = rowStride - pixelStride * width
+
+                val bitmapWidth = if (pixelStride != 0) width + rowPadding / pixelStride else width
+
+                val bmp: Bitmap? = try {
+                    buffer.rewind()
+                    val tmp = Bitmap.createBitmap(bitmapWidth, height, Bitmap.Config.ARGB_8888)
+                    tmp.copyPixelsFromBuffer(buffer)
+                    Bitmap.createBitmap(tmp, 0, 0, width, height).also { tmp.recycle() }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Bitmap creation failed: ${e.message}")
+                    null
+                }
+
+                if (bmp != null) {
+                    val baos = ByteArrayOutputStream()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 50, baos)
+                    val bytes = baos.toByteArray()
+                    baos.close()
+
+                    if (!frameQueue.offer(bytes)) {
+                        Log.w(TAG, "Frame queue full, dropping frame")
+                    }
+                    bmp.recycle()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error processing image: ${e.message}")
+            } finally {
+                image.close()
+            }
+
+        }, handler)
+    }
+
+    override fun onDestroy() {
+        try {
+            handlerThread?.quitSafely()
+            handlerThread?.join(500)
+        } catch (_: Exception) {
+        }
+        try {
+            senderThread?.interrupt()
+            senderThread?.join(500)
+        } catch (_: Exception) {
+        }
+        virtualDisplay?.release()
+        imageReader?.close()
+        try {
+            mediaProjection?.stop()
+        } catch (_: Exception) {
+        }
+        mediaProjection = null
+        frameQueue.clear()
+        Log.d(TAG, "Service destroyed")
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
 }    private lateinit var frameQueue: BlockingQueue<Bitmap>
     private lateinit var senderThread: Thread
     private var socket: Socket? = null

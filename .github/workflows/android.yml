@@ -22,6 +22,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: 'gradle'
 
       - name: Install system dependencies
         run: |
@@ -30,11 +31,80 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          api-level: 33
+          build-tools: 33.0.2
+          components: |
+            platform-tools
+            platforms;android-33
+            build-tools;33.0.2
 
-      - name: Install Android SDK components
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses 2>/dev/null || true
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Print project structure (debugging)
         run: |
-          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
-          yes | sdkmanager --licenses || true
+          echo "=== Repository root ==="
+          ls -la
+          echo ""
+          echo "=== App directory ==="
+          ls -la app 2>/dev/null || echo "No app directory found"
+          echo ""
+          echo "=== Gradle files ==="
+          find . -maxdepth 3 -name "*.gradle*" -o -name "gradlew*"
+
+      - name: Validate Gradle wrapper
+        run: |
+          if [ ! -f ./gradlew ]; then
+            echo "::error::Gradle wrapper not found. Please run 'gradle wrapper' and commit the files."
+            exit 1
+          fi
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace
+        timeout-minutes: 20
+
+      - name: Show build logs on failure
+        if: failure()
+        run: |
+          echo "=== Searching for build logs ==="
+          find . -type f -name "*.log" -path "*/build/*" -print -exec echo "File: {}" \; -exec tail -n 100 {} \; 2>/dev/null || true
+
+      - name: Upload Debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk-${{ github.run_number }}
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            */build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            */build/reports/
+          if-no-files-found: ignore
+          retention-days: 7          yes | sdkmanager --licenses || true
 
       - name: Cache Gradle packages
         uses: actions/cache@v4

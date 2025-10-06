@@ -1,14 +1,16 @@
-name: Android APK Build
+name: Android APK Build (robust)
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    env:
+      JAVA_TOOL_OPTIONS: "-Xmx3g"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -19,16 +21,62 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Gradle
-        run: sudo apt-get install -y gradle
+      - name: Install apt deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y wget unzip zip lib32stdc++6 lib32z1
+
+      - name: Install Gradle (fallback if no gradlew)
+        run: |
+          if ! command -v gradle >/dev/null 2>&1; then
+            sudo apt-get install -y gradle
+          fi
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          api-level: 33
+          build-tools: 33.0.2
+          components: |
+            platform-tools
+            platform-tools
+            platforms;android-33
+            build-tools;33.0.2
+            tools
 
-      - name: Build APK
-        run: gradle assembleDebug
+      - name: Accept Android SDK licenses
+        run: |
+          yes | "$ANDROID_SDK_ROOT/tools/bin/sdkmanager" --licenses || true
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses || true
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
 
-      - name: Upload APK
+      - name: Print project tree (for debugging)
+        run: |
+          echo "Repo root content:"
+          ls -la
+          echo "app folder content (if exists):"
+          ls -la app || true
+
+      - name: Build (use gradlew if present, otherwise gradle)
+        run: |
+          set -e
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx3g" || (tail -n 200 ./app/build/outputs/**/*.log || true; exit 1)
+          else
+            gradle assembleDebug --no-daemon --stacktrace -Dorg.gradle.jvmargs="-Xmx3g"
+          fi
+        timeout-minutes: 20
+
+      - name: Show last lines of build outputs (if any)
+        if: always()
+        run: |
+          echo "=== Last 200 lines of Gradle log files (if exist) ==="
+          find . -type f -name "*.log" -maxdepth 6 -print -exec tail -n 200 {} \; || true
+
+      - name: Upload APK (if produced)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk

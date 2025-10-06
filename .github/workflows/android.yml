@@ -71,6 +71,109 @@ jobs:
       - name: Install Gradle (fallback)
         if: steps.check_gradlew.outputs.found == 'false'
         run: |
+          set -e
+          GRADLE_VERSION=8.5
+          echo "Installing Gradle ${GRADLE_VERSION} to generate wrapper..."
+          wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp
+          export PATH="/tmp/gradle-${GRADLE_VERSION}/bin:$PATH"
+          gradle --version
+          
+          echo "Generating Gradle wrapper..."
+          gradle wrapper --gradle-version ${GRADLE_VERSION}
+          chmod +x ./gradlew
+          ./gradlew --version
+          
+          echo "Wrapper generated successfully"
+          echo "found=true" >> $GITHUB_OUTPUT
+        id: install_gradle
+
+      - name: Make Gradle wrapper executable
+        if: steps.check_gradlew.outputs.found == 'true' || steps.install_gradle.outputs.found == 'true'
+        run: chmod +x ./gradlew
+
+      - name: Build Debug APK with Gradle Wrapper
+        if: steps.check_gradlew.outputs.found == 'true' || steps.install_gradle.outputs.found == 'true'
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        timeout-minutes: 20
+
+      - name: Build Debug APK with Gradle
+        if: steps.check_gradlew.outputs.found == 'false' && steps.install_gradle.outputs.found != 'true'
+        run: gradle assembleDebug --no-daemon --stacktrace
+        timeout-minutes: 20
+
+      - name: Find and list APK files
+        if: always()
+        run: |
+          echo "=== Searching for APK files ==="
+          find . -name "*.apk" -type f 2>/dev/null || echo "No APK files found"
+
+      - name: Show build logs on failure
+        if: failure()
+        run: |
+          echo "=== Searching for build logs ==="
+          find . -type f -name "*.log" -path "*/build/*" 2>/dev/null | while read log; do
+            echo "File: $log"
+            tail -n 100 "$log"
+          done || echo "No log files found"
+
+      - name: Upload Debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk-${{ github.run_number }}
+          path: |
+            **/build/outputs/apk/debug/*.apk
+            **/build/outputs/apk/**/*debug*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload build reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports-${{ github.run_number }}
+          path: |
+            **/build/reports/
+            **/build/outputs/logs/
+          if-no-files-found: ignore
+          retention-days: 7          yes | sdkmanager --licenses || true
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Print project structure (debugging)
+        run: |
+          echo "=== Repository root ==="
+          ls -la
+          echo ""
+          echo "=== App directory ==="
+          ls -la app 2>/dev/null || echo "No app directory found"
+          echo ""
+          echo "=== Gradle files ==="
+          find . -maxdepth 3 \( -name "*.gradle*" -o -name "gradlew*" \) 2>/dev/null || true
+
+      - name: Check for Gradle wrapper
+        id: check_gradlew
+        run: |
+          if [ -f ./gradlew ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+            echo "Gradle wrapper found"
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+            echo "Gradle wrapper not found - will use fallback"
+          fi
+
+      - name: Install Gradle (fallback)
+        if: steps.check_gradlew.outputs.found == 'false'
+        run: |
           wget https://services.gradle.org/distributions/gradle-8.0-bin.zip
           sudo unzip -d /opt/gradle gradle-8.0-bin.zip
           sudo ln -s /opt/gradle/gradle-8.0/bin/gradle /usr/bin/gradle

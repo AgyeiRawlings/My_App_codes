@@ -23,7 +23,7 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          cache-disabled: true  # Disable cache to avoid the “Failed to save cache” errors
+          cache-disabled: true  # Avoid GitHub cache errors
 
       - name: Build with Gradle
         run: ./gradlew build

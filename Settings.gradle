@@ -15,4 +15,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "My_App_codes"
-// Removed include(":app") so Gradle uses the main folder as the app module
+include(":app")
+project(":app").projectDir = file(".")

@@ -15,5 +15,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "My_App_codes"
+
 include(":app")
 project(":app").projectDir = file(".")

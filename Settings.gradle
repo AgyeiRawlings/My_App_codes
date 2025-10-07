@@ -15,5 +15,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "My_App_codes"
+
+// 👇 This tells Gradle that your root folder IS the app
 include(":app")
 project(":app").projectDir = file(".")

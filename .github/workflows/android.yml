@@ -28,13 +28,14 @@ jobs:
       - name: Give permission to Gradlew
         run: chmod +x gradlew || true
 
-      # 🧩 Auto-fix structure before build
-      - name: Fix project structure
-        run: |
-          echo "🔧 Fixing Android project structure..."
-          mkdir -p app/src/main/java
-          mkdir -p app/src/main/res
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
 
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
           if [ -f AndroidManifest.xml ]; then
             mv AndroidManifest.xml app/src/main/
             echo "✅ Moved AndroidManifest.xml"

@@ -19,22 +19,22 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Gradle manually
+      - name: Ensure Gradle Wrapper
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gradle
-          gradle wrapper --gradle-version 8.7
-
-      - name: Give permission to Gradlew
-        run: chmod +x gradlew || true
+          if [ ! -f gradlew ]; then
+            echo "Gradle wrapper missing — creating..."
+            gradle wrapper --gradle-version 8.7
+          fi
+          chmod +x gradlew
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
+          path: app/build/outputs/apk/debug/*.apk          name: app-debug
           path: app/build/outputs/apk/debug/*.apk
           if [ -f AndroidManifest.xml ]; then
             mv AndroidManifest.xml app/src/main/

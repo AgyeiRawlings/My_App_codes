@@ -1,40 +1,44 @@
-name: Android Build
+#!/bin/bash
+# 🧱 Auto-fix Android project structure
 
-on:
-  push:
-    branches:
-      - main
+echo "📦 Fixing Android project structure..."
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# Create folders if missing
+mkdir -p app/src/main/java
+mkdir -p app/src/main/res
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+# Move AndroidManifest.xml
+if [ -f "AndroidManifest.xml" ]; then
+  mv AndroidManifest.xml app/src/main/
+  echo "✅ Moved AndroidManifest.xml"
+fi
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+# Move app-level build.gradle
+if [ -f "build.gradle" ]; then
+  if grep -q "com.android.application" build.gradle; then
+    mkdir -p app
+    mv build.gradle app/
+    echo "✅ Moved app build.gradle"
+  fi
+fi
 
-      - name: Install Gradle manually
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gradle
-          gradle wrapper --gradle-version 8.7
+# Move Kotlin source files (*.kt)
+for file in *.kt; do
+  if [ -f "$file" ]; then
+    mv "$file" app/src/main/java/
+    echo "✅ Moved $file to java/"
+  fi
+done
 
-      - name: Give permission to Gradlew
-        run: chmod +x gradlew || true
+# Move XML files (*.xml)
+for file in *.xml; do
+  if [ -f "$file" ]; then
+    mv "$file" app/src/main/res/
+    echo "✅ Moved $file to res/"
+  fi
+done
 
-      # 🧠 Auto-fix Android project structure before build
-      - name: Fix project structure
-        run: |
-          echo "🧩 Fixing Android project structure..."
-          mkdir -p app/src/main/java
-          mkdir -p app/src/main/res
-
+echo "🎯 Structure fix complete!"
           if [ -f AndroidManifest.xml ]; then
             mv AndroidManifest.xml app/src/main/
             echo "✅ Moved AndroidManifest.xml"
